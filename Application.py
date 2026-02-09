@@ -50,17 +50,17 @@ if __name__ == "__main__":
 
     elif(args.role == 'EVSE'):
         with Evse(args.interface_type, args.interface, args.mac) as evse:
-            # Set regulation parameters of the charger
-            evse.getCharger().setEvseDeltaVoltage(0.5)
-            evse.getCharger().setEvseDeltaCurrent(0.05)
+            # Set regulation parameters of the CanCharger
+            evse.getCanCharger().setEvseDeltaVoltage(0.5)
+            evse.getCanCharger().setEvseDeltaCurrent(0.05)
 
-            # Set limitations of the charger
-            evse.getCharger().setEvseMaxVoltage(400)
-            evse.getCharger().setEvseMaxCurrent(100)
-            evse.getCharger().setEvseMaxPower(25000)
+            # Set limitations of the CanCharger
+            evse.getCanCharger().setEvseMaxVoltage(400)
+            evse.getCanCharger().setEvseMaxCurrent(1)
+            evse.getCanCharger().setEvseMaxPower(25000)
 
-            # Start the charger
-            evse.getCharger().start()
+            # Start the CanCharger
+            evse.getCanCharger().start()
 
             # Set the schedule
             digest_value = range(31)
@@ -73,17 +73,17 @@ if __name__ == "__main__":
                         {
                             "start": 0,
                             "interval": 0,   # will only be processed for the last entry
-                            "power": evse.getCharger().getEvseMaxPower()
+                            "power": evse.getCanCharger().getEvseMaxPower()
                         },
                         {
                             "start": 1800,
                             "interval": 0,   # will only be processed for the last entry
-                            "power": int(evse.getCharger().getEvseMaxPower() * 0.75)
+                            "power": int(evse.getCanCharger().getEvseMaxPower() * 0.75)
                         },
                         {
                             "start": 3600,
                             "interval": 82800,
-                            "power": int(evse.getCharger().getEvseMaxPower() * 0.5)
+                            "power": int(evse.getCanCharger().getEvseMaxPower() * 0.5)
                         }
                     ]
                 }]
