@@ -145,9 +145,9 @@ class Evse():
         while True:
             if self.charging:
                 # Disable automatic GC during charging to prevent random pauses
-                #if gc.isenabled():
-                #    gc.disable()
-                #    print("[GC] Automatic garbage collection disabled during charging")
+                if gc.isenabled():
+                    gc.disable()
+                    print("[GC] Automatic garbage collection disabled during charging")
                 
                 loop_start = time.time()
 
@@ -684,3 +684,4 @@ class Evse():
             return self._handleEvConnected()
         else:
             return False
+
