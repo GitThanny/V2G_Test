@@ -2,7 +2,6 @@ import argparse
 import json
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'ocpp_lib'))
 
 '''
 sudo -E .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:48:AC:F0 -r EVSE --auto
@@ -20,7 +19,7 @@ from Ev import *
 if __name__ == "__main__":
     WHITEBBET_DEFAULT_MAC = "00:01:01:63:77:33"
     parser = argparse.ArgumentParser(description='Codico Whitebeet reference implementation.')
-    parser.add_argument('interface_type', type=str, choices=('eth', 'eth_raw', 'spi', 'spi_pru'), help='Type of the interface through which the Whitebeet is connected. ("eth", "eth_raw", "spi", or "spi_pru").')
+    parser.add_argument('interface_type', type=str, choices=('eth', 'spi'), help='Type of the interface through which the Whitebeet is connected. ("eth" or "spi").')
     parser.add_argument('-i', '--interface', type=str, required=True, help='This is the name of the interface where the Whitebeet is connected to (i.e. for eth "eth0" or spi "0").')
     parser.add_argument('-m', '--mac', type=str, help='This is the MAC address of the ethernet interface of the Whitebeet (i.e. "{}").'.format(WHITEBBET_DEFAULT_MAC))
     parser.add_argument('-r', '--role', type=str, choices=('EVSE', 'EV'), required=True, help='This is the role of the Whitebeet. "EV" for EV mode and "EVSE" for EVSE mode')
@@ -33,7 +32,11 @@ if __name__ == "__main__":
     parser.add_argument('--ocpp-version', type=str, choices=('1.6', '2.0.1', '2.1'), default='1.6', help='OCPP Protocol Version (default: 1.6).')
     args = parser.parse_args()
 
-    print(f'Welcome to Codico Whitebeet {args.role} reference implementation')
+        # If no MAC address was given set it to the default MAC address of the Whitebeet
+    if args.interface_type == "eth" and args.mac is None:
+        args.mac = WHITEBBET_DEFAULT_MAC
+
+    print('Welcome to Codico Whitebeet {} reference implementation'.format(args.role))
 
     # role is EV
     if(args.role == "EV"):
@@ -137,14 +140,9 @@ if __name__ == "__main__":
                 evse.setSchedule(schedule)
 
             # Start the EVSE loop
-            if args.ocpp_url and args.ocpp_id:
-                from OcppWorker import OcppWorker
-                ocpp_worker = OcppWorker(args.ocpp_url, args.ocpp_id, evse.getCanCharger(), args.ocpp_version, evse=evse)
-                ocpp_worker.start()
-                evse.set_ocpp_worker(ocpp_worker)
-
             evse.whitebeet.networkConfigSetPortMirrorState(args.portmirror)
             evse.loop()
             print("EVSE loop finished")
 
     print("Goodbye!")
+
