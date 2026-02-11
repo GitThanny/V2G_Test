@@ -194,7 +194,7 @@ class Evse():
                 # Memory can safely grow for a 30-60 min charging session
                 
                 # Log EVERY iteration until we find the problem
-                print(f"[LOOP#{self._poll_count}] recv:{recv_time:.0f}ms upd:{update_time:.0f}ms total:{total_time:.0f}ms id:{id}")
+                # print(f"[LOOP#{self._poll_count}] recv:{recv_time:.0f}ms upd:{update_time:.0f}ms total:{total_time:.0f}ms id:{id}")
                 
                 if total_time > 400:
                     print(f"[TIMING WARNING] Loop took {total_time:.0f}ms (should be < 500ms)")
@@ -665,4 +665,5 @@ class Evse():
             return self._handleEvConnected()
         else:
             return False
+
 
