@@ -1,4 +1,3 @@
-
 import time
 import threading
 import sys
@@ -76,43 +75,16 @@ class CanCharger():
         self._receive_thread.start()
 
     def _receive_loop(self):
-        last_request_time = 0
-        last_keepalive_time = 0
-        REQUEST_INTERVAL = 0.2  # Send CAN read requests every 200ms
-        KEEPALIVE_INTERVAL = 5.0  # Send keep-alive every 5 seconds
-
         while not self._stop_event.is_set():
             try:
-                now = time.time()
-                
-                # Periodically send CAN read requests for voltage/current
-                if self.started and (now - last_request_time) >= REQUEST_INTERVAL:
-                    self._request_present_values()
-                    last_request_time = now
-
-                # Periodically send keep-alive (operational readiness)
-                if self.started and (now - last_keepalive_time) >= KEEPALIVE_INTERVAL:
-                    data = [0x11, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA0]
-                    self._send_command(0x24, data)
-                    print(f"[CAN] Keep-alive sent")
-                    last_keepalive_time = now
-
-                # Receive CAN responses (short timeout to allow periodic sends)
-                msg = self.bus.recv(timeout=0.05)
+                # python-can recv is blocking with timeout
+                msg = self.bus.recv(timeout=1.0)
                 if msg:
                     self._process_frame(msg)
             except Exception as e:
                 print(f"Error in receive loop: {e}")
+                # Don't tight loop on error
                 time.sleep(0.1)
-
-    def _request_present_values(self):
-        """Send CAN read requests for present voltage and current."""
-        # Read System Voltage: 0x23 0x10 0x01
-        data_v = [0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        self._send_command(0x23, data_v, target_addr=self.TARGET_ADDR_BROADCAST)
-        # Read System Current: 0x23 0x10 0x02
-        data_c = [0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        self._send_command(0x23, data_c, target_addr=self.TARGET_ADDR_BROADCAST)
                 
     def _process_frame(self, msg):
         """
