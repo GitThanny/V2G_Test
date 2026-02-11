@@ -4,10 +4,9 @@ import threading
 from Whitebeet import *
 from CanCharger import *
 from RelayControl import *
-from api_server import ApiServer
 
 class Evse():
-    def __init__(self, iftype, iface, mac, auto_authorize=False, api_port=None):
+    def __init__(self, iftype, iface, mac, auto_authorize=False):
         self.whitebeet = Whitebeet(iftype, iface, mac)
         print(f"WHITE-beet-EI firmware version: {self.whitebeet.version}")
         self.relay = RelayControl("P8_17")
@@ -17,7 +16,6 @@ class Evse():
         self.evse_config = None
         self.auto_authorize = auto_authorize
         self.charging = False
-        self.api_server = None
         
         # Background update thread support
         self._poll_count = 0  # For debug timing logs
@@ -27,23 +25,14 @@ class Evse():
         self._latest_charging_params = None
         self._gc_manual_collect_counter = 0
 
-
-        if api_port:
-            self.api_server = ApiServer(self, port=api_port)
-            self.api_server.start()
-
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if self.api_server:
-            self.api_server.shutdown()
         if hasattr(self, "whitebeet"):
             del self.whitebeet
 
     def __del__(self):
-        if self.api_server:
-            self.api_server.shutdown()
         if hasattr(self, "whitebeet"):
             del self.whitebeet
 
@@ -676,3 +665,4 @@ class Evse():
             return self._handleEvConnected()
         else:
             return False
+
