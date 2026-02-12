@@ -71,20 +71,25 @@ When SLAC was succefully performed the EVSE and the EV are in same network and t
 To get started first clone the repository. This will get you the latest version of the repository.
 
 ```console
-$ git clone https://github.com/SEVENSTAX/FreeV2G
-$ cd FreeV2G
+$ git clone https://github.com/GitThanny/V2G.git
+$ cd V2G
 ```
 
 Create a virtual environment
 ```console
 $ python3 -m venv .venv
 $ source .venv/bin/activate
+$ deactivate (for off venv)
 ```
 
-Install the python packages needed
+Install the python packages needed in venv mode
 ```console
-$ pip install --pre scapy[basic]
+$ pip install flask
+$ pip install spidev
+$ pip install scapy
 $ pip install Cython
+$ pip install Adafruit_BBIO
+$ pip install python-can
 $ pip install python-libpcap
 ```
 
@@ -97,13 +102,18 @@ Find the MAC address printed on the label of the board in the form of i.e. c4:93
 Find the ethernet interface the WHITE-beet is connected to with
 
 ```console
-$ ip list
+$ sudo ip link show
+$ sudo ip link show eth0
 ```
 
 Run the Application in EVSE mode by typing (we need root privileges for raw socket access).
 
 ```console
-$ sudo .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:22:22:22 -r EVSE
+$ sudo ip link set can2 down
+$ sudo ip link set can2 up type can bitrate 125000
+$ sudo ip link set can2 up type can bitrate 125000 loopback on
+$ sudo -E .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:48:AC:F0 -r EVSE --auto
+$ sudo nice -n -20 .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:48:AC:F0 -r EVSE --auto
 ```
 
 You should see the following output
@@ -200,7 +210,8 @@ Goodbye!
 Run the application in EV mode by typing
 
 ```console
-$ sudo .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:33:33:33 -r EV
+$ sudo -E .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:47:cd:e7 -r EV --auto
+$ sudo nice -n -20 .venv/bin/python3 Application.py eth -i eth0 -m c4:93:00:47:cd:e7 -r EV --auto
 ```
 
 ## CONFIGURATION
@@ -246,3 +257,4 @@ Power up the WHITE-beet and run the application in SPI mode with the following c
 ```console
 sudo .venv/bin/python3 Application.py spi -i spidev0.0 -m 00:01:01:63:77:33 -r EVSE
 ```
+
