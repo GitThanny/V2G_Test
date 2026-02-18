@@ -12,7 +12,7 @@ except ImportError:
     # For now, let's allow import but fail on __init__
     can = None
 
-class CanCharger():
+class CanPhoenix():
     """
     Implementation of ChargerInterface for Phoenix Contact Charger module via CAN bus.
     Uses 'python-can' library for CAN communication.
@@ -119,14 +119,12 @@ class CanCharger():
             val_bytes = bytes(payload[4:8])
             voltage_mv = int.from_bytes(val_bytes, byteorder='big', signed=False)
             self.evse_present_voltage = voltage_mv / 1000.0
-            # print(f"Updated Voltage: {self.evse_present_voltage} V")
 
         # Response to System Current Read: 0x10 0x02 ...
         elif byte0 == 0x10 and byte1 == 0x02:
             val_bytes = bytes(payload[4:8])
             current_ma = int.from_bytes(val_bytes, byteorder='big', signed=False)
             self.evse_present_current = current_ma / 1000.0
-            # print(f"Updated Current: {self.evse_present_current} A")
 
     def _build_identifier(self, error_code, device_no, command_no, target_addr, source_addr):
         ident = 0
@@ -297,15 +295,43 @@ class CanCharger():
 
     def isPowerLimitExceeded(self, power):
         return power > self.evse_max_power
+        
+    def StartCanLoop(self):
+        """Spawns a background thread to send the start command every 5 seconds."""
+        if not hasattr(self, '_heartbeat_active'):
+            self._heartbeat_active = False
+            self._heartbeat_thread = None
+
+        if not self._heartbeat_active:
+            self._heartbeat_active = True
+            self._heartbeat_thread = threading.Thread(target=self._heartbeat_worker, daemon=True)
+            self._heartbeat_thread.start()
+            print("[CAN] Phoenix Contact Heartbeat Loop Started")
+
+    def StopCanLoop(self):
+        """Stops the background heartbeat loop and turns off the hardware."""
+        self._heartbeat_active = False
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=1.0)
+        self.stop() # Sends the 'OFF' signal (A1) to the charger
+        print("[CAN] Phoenix Contact Heartbeat Loop Stopped")
+
+    def _heartbeat_worker(self):
+        """The actual background worker sending the signal every 5 seconds."""
+        while self._heartbeat_active:
+            try:
+                # Command 0x24: Enable operational readiness (A0 = ON)
+                self.start() 
+            except Exception as e:
+                print(f"[CAN HEARTBEAT ERROR] {e}")
+            
+            # Sleep for 5 seconds (non-blocking because it's in a thread)
+            time.sleep(5)
 
 if __name__ == "__main__":
-    print("Initializing CanCharger with virtual interface...")
-    # NOTE: This requires a virtual CAN interface named 'vcan0' to be up.
-    # sudo modprobe vcan
-    # sudo ip link add dev vcan0 type vcan
-    # sudo ip link set up vcan0
+    print("Initializing CanPhoenix with virtual interface...")
     try:
-        charger = CanCharger(interface='virtual', channel='vcan0')
+        charger = CanPhoenix(interface='virtual', channel='vcan0')
         charger.start()
         time.sleep(1)
         charger.stop()
