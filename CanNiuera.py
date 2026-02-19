@@ -12,51 +12,47 @@ except ImportError:
 
 class CanNiuera:
     """
-    NIUERA Charging Module (X-EV series) CAN interface, based on:
-    - "V2G Module Communication Protocol V1.3" (Baud rate 125 kbps)
-      Identifier: PROTNO(9) + PTP(1) + DSTADDR(8) + SRCADDR(8) + Group(3)
-      Payload:
-        Set:  03 00 [RegHi RegLo] [Data(4 bytes)]
-        Read: 10 00 [RegHi RegLo] 00 00 00 00
-        Resp: 42 [Err] [RegHi RegLo] [Data(4 bytes)]
-    Keeps the same structure/pattern as your CanPhoenix class (start/stop, getters/setters, background RX loop).
+    NIUERA V2G module CAN interface (keeps CanPhoenix-like structure).
+
+    Identifier (29-bit):
+      PROTNO(9) + PTP(1) + DSTADDR(8) + SRCADDR(8) + GROUP(3)
+
+    Payload:
+      WRITE (SET): [0x03, 0x00, RegHi, RegLo, D0, D1, D2, D3]
+      READ:        [0x10, 0x00, RegHi, RegLo, 0x00, 0x00, 0x00, 0x00]
+      RESP:        [0x42, Err,  RegHi, RegLo, D0, D1, D2, D3]
     """
 
-    # --- CAN Protocol constants (NIUERA) ---
-    PROTNO_DEFAULT = 0x061  # 9-bit protocol number :contentReference[oaicite:1]{index=1}
+    # -------------------------------
+    # Protocol constants
+    # -------------------------------
+    PROTNO_DEFAULT = 0x061  # 9-bit
 
     # PTP
     PTP_BROADCAST = 0
     PTP_P2P = 1
 
     # Addresses
-    मॉODULE_ADDR_MIN = 0x00
-    MODULE_ADDR_MAX = 0x3C  # (some docs say 00~60 decimal; panel default 0x00) :contentReference[oaicite:2]{index=2}
-    MONITOR_ADDR_DEFAULT = 0xF0  # monitoring address fixed :contentReference[oaicite:3]{index=3}
-    DST_BROADCAST_ALL = 0xFF      # broadcast address :contentReference[oaicite:4]{index=4}
-    DST_BROADCAST_GROUP = 0xFE    # intra-group broadcast :contentReference[oaicite:5]{index=5}
+    MONITOR_ADDR_DEFAULT = 0xF0
+    DST_BROADCAST_ALL = 0xFF
+    DST_BROADCAST_GROUP = 0xFE
 
-    # Function codes
-    FC_SET = 0x03
-    FC_READ = 0x10
-    FC_RESP_INT = 0x42
+    # "Byte00" function codes (your requested naming)
+    WRITE_BYTE00 = 0x03
+    READ_BYTE00 = 0x10
+    RESP_BYTE00 = 0x42
 
-    # Response error codes (byte1)
+    # Response status codes (byte1 in RESP)
     RESP_OK = 0xF0
     RESP_FAIL = 0xF2
 
-    # Registers we need (Table 1)
-    REG_READ_DC_VI = 0x000F      # Read DC voltage/current (0.1V, 0.01A signed) :contentReference[oaicite:6]{index=6}
-    REG_POWER_ONOFF = 0x0030     # 0x00000000 startup, 0x00010000 shutdown :contentReference[oaicite:7]{index=7}
-    REG_SET_DC_LINK_V = 0x0077   # mV :contentReference[oaicite:8]{index=8}
-    REG_SET_DC_CURRENT = 0x0079  # mA (signed: +rectifier, -inverter) :contentReference[oaicite:9]{index=9}
-    REG_READ_STATUS = 0x0040     # alarm/status bits :contentReference[oaicite:10]{index=10}
-    REG_SET_WORKMODE = 0x002F    # 0 grid, 1 off-grid, 2 rectifier (only when powered off) :contentReference[oaicite:11]{index=11}
-
-    # Work modes (optional helpers)
-    MODE_GRID = 0
-    MODE_OFFGRID = 1
-    MODE_RECTIFIER = 2
+    # Registers
+    REG_POWER_ONOFF = 0x0030      # 0x00000000 startup, 0x00010000 shutdown
+    REG_SET_DC_LINK_V = 0x0077    # u32 mV
+    REG_SET_DC_CURRENT = 0x0079   # s32 mA
+    REG_READ_DC_VI = 0x000F       # table says 0x000F (some examples show 0x000E)
+    REG_READ_DC_VI_ALT = 0x000E   # accept both to be safe
+    REG_READ_STATUS = 0x0040      # status bits (u32)
 
     def __init__(
         self,
@@ -67,6 +63,7 @@ class CanNiuera:
         src_addr=MONITOR_ADDR_DEFAULT,
         group=0,
         ptp=PTP_BROADCAST,
+        debug=False,
     ):
         if can is None:
             raise ImportError("python-can library not installed.")
@@ -78,17 +75,21 @@ class CanNiuera:
         self.is_connected = False
 
         # NIUERA addressing
-        self.dst_addr = dst_addr
-        self.src_addr = src_addr
+        self.dst_addr = dst_addr & 0xFF
+        self.src_addr = src_addr & 0xFF
         self.group = group & 0x07
         self.ptp = 1 if ptp else 0
 
-        # Internal state (keep same names as CanPhoenix pattern)
+        # Debug prints
+        self.debug = bool(debug)
+
+        # Internal state (same names style)
         self.evse_max_voltage = 0
         self.evse_min_voltage = 0
         self.evse_max_current = 0
         self.evse_min_current = 0
         self.evse_max_power = 0
+
         self.evse_present_voltage = 0.0
         self.evse_present_current = 0.0
 
@@ -109,8 +110,8 @@ class CanNiuera:
         self._heartbeat_active = False
         self._heartbeat_thread = None
 
+        # Try to open connection
         try:
-            # For socketcan, bitrate is usually set at OS level; we pass anyway for consistency.
             self.bus = can.Bus(interface=self.interface_type, channel=self.channel, bitrate=self.bitrate)
             self.is_connected = True
             print(f"Connected to CAN interface: {self.interface_type}/{self.channel} @ {self.bitrate}")
@@ -144,23 +145,14 @@ class CanNiuera:
         return v - 0x10000 if v & 0x8000 else v
 
     @staticmethod
-    def _i32_to_be_bytes(val: int):
-        return list(int(val).to_bytes(4, byteorder="big", signed=True))
-
-    @staticmethod
     def _u32_to_be_bytes(val: int):
         return list(int(val).to_bytes(4, byteorder="big", signed=False))
 
+    @staticmethod
+    def _i32_to_be_bytes(val: int):
+        return list(int(val).to_bytes(4, byteorder="big", signed=True))
+
     def _build_identifier(self, dst_addr=None, src_addr=None, group=None, ptp=None, protno=None):
-        """
-        29-bit identifier:
-          bits 28..20: PROTNO (9 bits)
-          bit  19    : PTP (1 bit)
-          bits 18..11: DSTADDR (8 bits)
-          bits 10..3 : SRCADDR (8 bits)
-          bits 2..0  : Group (3 bits)
-        :contentReference[oaicite:12]{index=12}
-        """
         protno = self.PROTNO_DEFAULT if protno is None else (protno & 0x1FF)
         ptp = self.ptp if ptp is None else (1 if ptp else 0)
         dst = self.dst_addr if dst_addr is None else (dst_addr & 0xFF)
@@ -187,9 +179,13 @@ class CanNiuera:
         if not self.is_connected:
             return False
         if len(data) != 8:
-            raise ValueError("NIUERA frames must be 8 bytes data.")
+            raise ValueError("NIUERA frames must be exactly 8 bytes")
 
         ident = self._build_identifier(dst_addr=dst_addr)
+
+        if self.debug:
+            print(f"[TX] ID=0x{ident:08X} DATA={' '.join(f'{b:02X}' for b in data)}")
+
         try:
             msg = can.Message(arbitration_id=ident, data=data, is_extended_id=True)
             self.bus.send(msg)
@@ -198,20 +194,21 @@ class CanNiuera:
             print(f"[NIUERA] Error sending CAN frame: {e}")
             return False
 
-    def _send_set_reg_u32(self, reg: int, value_u32: int, dst_addr=None):
-        data = [self.FC_SET, 0x00, (reg >> 8) & 0xFF, reg & 0xFF] + self._u32_to_be_bytes(value_u32)
+    def _send_write_reg_u32(self, reg: int, value_u32: int, dst_addr=None):
+        vb = self._u32_to_be_bytes(value_u32)
+        data = [self.WRITE_BYTE00, 0x00, (reg >> 8) & 0xFF, reg & 0xFF] + vb
         return self._send(data, dst_addr=dst_addr)
 
-    def _send_set_reg_i32(self, reg: int, value_i32: int, dst_addr=None):
-        data = [self.FC_SET, 0x00, (reg >> 8) & 0xFF, reg & 0xFF] + self._i32_to_be_bytes(value_i32)
+    def _send_write_reg_i32(self, reg: int, value_i32: int, dst_addr=None):
+        vb = self._i32_to_be_bytes(value_i32)
+        data = [self.WRITE_BYTE00, 0x00, (reg >> 8) & 0xFF, reg & 0xFF] + vb
         return self._send(data, dst_addr=dst_addr)
 
     def _send_read_reg(self, reg: int, dst_addr=None):
-        data = [self.FC_READ, 0x00, (reg >> 8) & 0xFF, reg & 0xFF, 0, 0, 0, 0]
+        data = [self.READ_BYTE00, 0x00, (reg >> 8) & 0xFF, reg & 0xFF, 0, 0, 0, 0]
         return self._send(data, dst_addr=dst_addr)
 
     def _process_frame(self, msg):
-        # NIUERA uses extended ID
         if not msg.is_extended_id:
             return
 
@@ -223,115 +220,138 @@ class CanNiuera:
         if len(payload) < 8:
             return
 
+        if self.debug:
+            print(f"[RX] ID=0x{msg.arbitration_id:08X} DATA={' '.join(f'{b:02X}' for b in payload)}")
+
         fc = payload[0]
 
         # Response frame
-        if fc == self.FC_RESP_INT:
+        if fc == self.RESP_BYTE00:
             err = payload[1]
             reg = (payload[2] << 8) | payload[3]
             d4, d5, d6, d7 = payload[4], payload[5], payload[6], payload[7]
 
             if err != self.RESP_OK:
-                # Fail reply exists (F2) :contentReference[oaicite:13]{index=13}
                 return
 
-            # Parse known registers
-            if reg == self.REG_READ_DC_VI:
-                # byte4~5: DC voltage (0.1V), byte6~7: DC current (0.01A signed) :contentReference[oaicite:14]{index=14}
-                v_raw = self._u16_be(d4, d5)        # 0.1V
-                i_raw = self._s16_be(d6, d7)        # 0.01A signed
+            # DC V/I (accept 0x000F and 0x000E)
+            if reg in (self.REG_READ_DC_VI, self.REG_READ_DC_VI_ALT):
+                v_raw = self._u16_be(d4, d5)     # 0.1V
+                i_raw = self._s16_be(d6, d7)     # 0.01A signed
                 self.evse_present_voltage = v_raw / 10.0
                 self.evse_present_current = i_raw / 100.0
 
             elif reg == self.REG_READ_STATUS:
-                # Status is 32-bit, but table defines bits; we store raw for debugging :contentReference[oaicite:15]{index=15}
                 self.last_status_bits = (d4 << 24) | (d5 << 16) | (d6 << 8) | d7
-                # Bits 12-13 = working mode (0 grid, 1 off-grid, 2 rectifier)
                 self.last_work_mode = (self.last_status_bits >> 12) & 0x03
 
-            # else: ignore for now
-
     def start(self):
-        """
-        Power ON command:
-          reg 0x0030, value 0x00000000 = startup :contentReference[oaicite:16]{index=16}
-        """
-        ok = self._send_set_reg_u32(self.REG_POWER_ONOFF, 0x00000000)
+        """Power ON (NIUERA reg 0x0030 = 0x00000000)."""
+        WRITE_BYTE00 = self.WRITE_BYTE00
+        data = [WRITE_BYTE00, 0x00, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00]
+        ok = self._send(data)
         if ok:
             self.started = True
         return ok
 
     def stop(self):
-        """
-        Power OFF command:
-          reg 0x0030, value 0x00010000 = shutdown :contentReference[oaicite:17]{index=17}
-        """
-        ok = self._send_set_reg_u32(self.REG_POWER_ONOFF, 0x00010000)
+        """Power OFF (NIUERA reg 0x0030 = 0x00010000)."""
+        WRITE_BYTE00 = self.WRITE_BYTE00
+        data = [WRITE_BYTE00, 0x00, 0x00, 0x30, 0x00, 0x01, 0x00, 0x00]
+        ok = self._send(data)
         if ok:
             self.started = False
 
-        # Safety: set current/voltage targets to 0 (best-effort)
+        # Best effort safety
         try:
             self.setEvTargetCurrent(0)
             self.setEvTargetVoltage(0)
         except Exception:
             pass
+
         return ok
 
     def close(self):
-        """Stops threads and closes bus (same pattern)."""
-        # stop heartbeat first (so it won't send after shutdown)
+        """Stops threads and closes bus."""
         self.StopCanLoop()
 
         self._stop_event.set()
         if self._receive_thread:
             self._receive_thread.join(timeout=2.0)
+
         if self.bus:
             try:
                 self.bus.shutdown()
             except Exception:
                 pass
+
         self.is_connected = False
-    
-    # EVSE limits
-    def setEvseMaxCurrent(self, value): self.evse_max_current = value
-    def setEvseMinCurrent(self, value): self.evse_min_current = value
-    def setEvseMaxVoltage(self, value): self.evse_max_voltage = value
-    def setEvseMinVoltage(self, value): self.evse_min_voltage = value
-    def setEvseMaxPower(self, value): self.evse_max_power = value
-    def setEvseDeltaVoltage(self, value): pass
-    def setEvseDeltaCurrent(self, value): pass
 
-    # EV limits
-    def setEvMaxCurrent(self, value): self.ev_max_current = value
-    def setEvMinCurrent(self, value): self.ev_min_current = value
-    def setEvMaxVoltage(self, value): self.ev_max_voltage = value
-    def setEvMinVoltage(self, value): self.ev_min_voltage = value
-    def setEvMinPower(self, value): pass
-    def setEvMaxPower(self, value): self.ev_max_power = value
+# --- Setters for EVSE Capabilities ---
+    def setEvseMaxCurrent(self, value):
+        self.evse_max_current = value
 
+    def setEvseMinCurrent(self, value):
+        self.evse_min_current = value
+
+    def setEvseMaxVoltage(self, value):
+        self.evse_max_voltage = value
+
+    def setEvseMinVoltage(self, value):
+        self.evse_min_voltage = value
+
+    def setEvseMaxPower(self, value):
+        self.evse_max_power = value
+
+    def setEvseDeltaVoltage(self, value):
+        pass
+
+    def setEvseDeltaCurrent(self, value):
+        pass
+
+    # --- Setters for EV Limits ---
+    def setEvMaxCurrent(self, value):
+        self.ev_max_current = value
+
+    def setEvMinCurrent(self, value):
+        self.ev_min_current = value
+
+    def setEvMaxVoltage(self, value):
+        self.ev_max_voltage = value
+
+    def setEvMinVoltage(self, value):
+        self.ev_min_voltage = value
+
+    def setEvMinPower(self, value):
+        pass
+
+    def setEvMaxPower(self, value):
+        self.ev_max_power = value
+
+    # --- Dynamic Targets ---
     def setEvTargetVoltage(self, voltage):
-        """
-        NIUERA: Set DC link voltage register 0x0077, unit mV :contentReference[oaicite:18]{index=18}
-        We'll accept volts (float/int) like your Phoenix class did.
-        """
+        """NIUERA: reg 0x0077, value=mV (u32). Input volts."""
         if self.isVoltageLimitExceeded(voltage):
             return False
-        mv = int(float(voltage) * 1000.0)
-        return self._send_set_reg_u32(self.REG_SET_DC_LINK_V, mv)
+
+        WRITE_BYTE00 = self.WRITE_BYTE00
+        voltage_mv = int(float(voltage) * 1000.0)
+        val_bytes = voltage_mv.to_bytes(4, byteorder="big", signed=False)
+        data = [WRITE_BYTE00, 0x00, 0x00, 0x77, val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]
+        return self._send(data)
 
     def setEvTargetCurrent(self, current):
-        """
-        NIUERA: Set DC current register 0x0079, unit mA, signed
-          Rectifier mode: positive
-          Inverter mode:  negative :contentReference[oaicite:19]{index=19}
-        We'll accept amps (float/int).
-        """
+        """NIUERA: reg 0x0079, value=mA (s32). Input amps."""
         if self.isCurrentLimitExceeded(current):
             return False
-        ma = int(float(current) * 1000.0)
-        return self._send_set_reg_i32(self.REG_SET_DC_CURRENT, ma)
 
+        WRITE_BYTE00 = self.WRITE_BYTE00
+        current_ma = int(float(current) * 1000.0)
+        val_bytes = current_ma.to_bytes(4, byteorder="big", signed=True)
+        data = [WRITE_BYTE00, 0x00, 0x00, 0x79, val_bytes[0], val_bytes[1], val_bytes[2], val_bytes[3]]
+        return self._send(data)
+
+    # --- Getters ---
     def getEvseMaxCurrent(self): return self.evse_max_current
     def getEvseMinCurrent(self): return self.evse_min_current
     def getEvseMaxVoltage(self): return self.evse_max_voltage
@@ -346,30 +366,29 @@ class CanNiuera:
     def getEvMinPower(self): return 0
     def getEvMaxPower(self): return self.ev_max_power
 
+    # --- Real-time Values (Phoenix-like: build data locally) ---
     def getEvsePresentVoltage(self):
-        """
-        Reads DC V/I from reg 0x000F and returns cached voltage.
-        Voltage unit in response is 0.1V :contentReference[oaicite:20]{index=20}
-        """
-        self._send_read_reg(self.REG_READ_DC_VI)
+        """Request DC V/I and return cached voltage (V)."""
+        READ_BYTE00 = self.READ_BYTE00
+        data = [READ_BYTE00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00]
+        self._send(data)
         return self.evse_present_voltage
 
     def getEvsePresentCurrent(self):
-        """
-        Reads DC V/I from reg 0x000F and returns cached current.
-        Current unit in response is 0.01A signed :contentReference[oaicite:21]{index=21}
-        """
-        self._send_read_reg(self.REG_READ_DC_VI)
+        """Request DC V/I and return cached current (A)."""
+        READ_BYTE00 = self.READ_BYTE00
+        data = [READ_BYTE00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00, 0x00]
+        self._send(data)
         return self.evse_present_current
 
     def getModuleStatusBits(self):
-        """Optional helper: request + return cached status bits (reg 0x0040)."""
-        self._send_read_reg(self.REG_READ_STATUS)
+        """Request status bits and return cached bits."""
+        READ_BYTE00 = self.READ_BYTE00
+        data = [READ_BYTE00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00]
+        self._send(data)
         return self.last_status_bits
 
-    # ----------------------------
-    # Safety checks (same logic)
-    # ----------------------------
+    # --- Safety checks ---
     def isVoltageLimitExceeded(self, voltage):
         return voltage > self.evse_max_voltage or (self.evse_min_voltage > 0 and voltage < self.evse_min_voltage)
 
@@ -379,13 +398,9 @@ class CanNiuera:
     def isPowerLimitExceeded(self, power):
         return power > self.evse_max_power
 
+
     def StartCanLoop(self, period_s=5.0, keep_alive_read=True):
-        """
-        NIUERA spec mentions shutdown if background communication interruption >10s (product spec) :contentReference[oaicite:22]{index=22}
-        So we keep a simple loop that:
-          - Optionally re-sends 'start' (safe if already started)
-          - Optionally reads DC V/I to keep traffic alive
-        """
+        """Keep CAN traffic alive (read DC V/I periodically)."""
         if not self._heartbeat_active:
             self._heartbeat_active = True
             self._heartbeat_thread = threading.Thread(
@@ -403,25 +418,18 @@ class CanNiuera:
     def _heartbeat_worker(self, period_s, keep_alive_read):
         while self._heartbeat_active:
             try:
-                # Keep module alive / ensure it's on
-                if self.started:
-                    # Best-effort: read DC V/I to avoid comm timeout
-                    if keep_alive_read:
-                        self._send_read_reg(self.REG_READ_DC_VI)
-                else:
-                    # If not started, don't spam; you can still call start() externally
-                    pass
+                if self.started and keep_alive_read:
+                    self._send_read_reg(self.REG_READ_DC_VI)
             except Exception as e:
                 print(f"[NIUERA HEARTBEAT ERROR] {e}")
             time.sleep(float(period_s))
-
 
 if __name__ == "__main__":
     print("Initializing CanNiuera...")
     try:
         charger = CanNiuera(interface="socketcan", channel="can2", bitrate=125000)
         charger.start()
-        time.sleep(1)
+        time.sleep(5)
         charger.stop()
         charger.close()
         print("Test Complete.")
@@ -429,3 +437,50 @@ if __name__ == "__main__":
         print("Skipping test: python-can not installed.")
     except Exception as e:
         print(f"Test failed (expected if vcan0 not up): {e}")
+
+    '''
+    try:
+        charger = CanNiuera(interface="socketcan", channel="can2", bitrate=125000, debug=False)
+
+        # Make sure your limit check won't reject these
+        charger.setEvseMaxVoltage(600)   # must be >= 500
+        charger.setEvseMinVoltage(0)
+
+        charger.start()
+        time.sleep(1.0)
+
+        hold_s = 5.0
+        read_interval_s = 0.2
+
+        # Forward then reverse sequence (include 500 twice to hold it on the way down too)
+        forward = [100, 200, 300, 400, 500]
+        reverse = [500, 400, 300, 200, 100]
+        sequence = forward + reverse
+
+        print("[TEST] Sequence: 100->200->300->400->500 (5s each) then 500->400->300->200->100 (5s each)")
+
+        for target_v in sequence:
+            ok = charger.setEvTargetVoltage(float(target_v))
+            if not ok:
+                print(f"[ERROR] setEvTargetVoltage({target_v}) rejected by limit check.")
+                break
+
+            print(f"\n=== SET TARGET {target_v:.1f}V (hold {hold_s:.1f}s) ===")
+            t0 = time.time()
+            while (time.time() - t0) < hold_s:
+                meas = charger.getEvsePresentVoltage()
+                print(f"       Target={target_v:6.1f}V  Measured={meas:6.1f}V")
+                time.sleep(read_interval_s)
+
+        charger.stop()
+        charger.close()
+        print("Test Complete.")
+
+    except ImportError:
+        print("Skipping test: python-can not installed.")
+    except Exception as e:
+        print(f"Test failed: {e}")
+    '''
+
+
+    
